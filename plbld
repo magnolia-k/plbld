@@ -1,0 +1,184 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use autodie;
+
+use File::Temp;
+use File::Fetch;
+use File::Path qw/make_path/;
+use Archive::Tar;
+
+main() unless caller();
+
+sub main {
+    die "plbld requires path to install.\n" if ( @ARGV == 1 );
+
+    my $home = initialize();
+
+    download_CPAN_Perl_Releases( $home );
+
+    unless ( @ARGV ) {
+        show_versions();
+        exit(0);
+    }
+
+    my $version = shift @ARGV;
+    my $path    = shift @ARGV;
+    my @args    = @ARGV;
+
+    validate_install_path( $path );
+
+    my $tarball = validate_version_string( $version );
+
+    unless ( $tarball ) {
+        die "It is a version not existing.\n";
+    }
+
+    my $build_dir = download_perl( $tarball, $home );
+
+    chdir File::Spec->catdir( $home, $build_dir->name );
+
+    build_perl( $version, $path, \@args );
+}
+
+sub validate_install_path {
+    my $path = shift;
+
+    if ( -d $path ) {
+
+        return $path if ( -w $path );
+        
+        die "Can't write to $path.Please cehck write permission.\n";
+
+    } else {
+
+        make_path ( $path );
+
+        return $path;
+    }
+}
+
+sub build_perl {
+    my $version   = shift;
+    my $path      = shift;
+    my $args_ref  = shift;
+
+    my $configure = 'sh Configure -de -Dprefix=' . $path;
+
+    my @frag = split( '.', $version );
+
+    if ( $frag[1] % 2 == 0 ) {
+        $configure .= ' ' . '-Dusedevel';
+    }
+
+    $configure .= ' ' . join( ' ', @{ $args_ref } ) if @{ $args_ref };
+
+    my @cmds;
+    push @cmds, $configure;
+    push @cmds, 'make';
+    push @cmds, 'make install';
+
+    foreach my $cmd ( @cmds ) {
+
+        system ( $cmd );
+
+        next unless $?;
+
+        if ( $? == -1 ) {
+            die( "Failed to execute:$cmd" );
+        } elsif ( $? & 127 ) {
+            die "Child died with signal:$cmd";
+        } else {
+            die "Build fail.Command:$cmd return code:" . ( $? >> 8 );
+        }
+    }
+
+}
+
+sub download_perl {
+    my $tarball = shift;
+    my $home    = shift;
+
+    my $uri = 'http://cpan.metacpan.org/authors/id/' . $tarball;
+
+    my $ff = File::Fetch->new( uri => $uri );
+    my $path = $ff->fetch( to => $home ) or die $ff->error;
+
+    my $archive = Archive::Tar->new;
+
+    $archive->read( $path )       or die $archive->error;
+    $archive->setcwd( $home )     or die $archive->error;
+    my @files = $archive->extract or die $archive->error;
+
+    return $files[0];
+}
+
+sub initialize {
+    my $home = File::Temp->newdir;
+
+
+    return $home;
+}
+
+sub download_CPAN_Perl_Releases {
+    my $home = shift;
+
+    my $uri = 'http://api.metacpan.org/v0/release/CPAN-Perl-Releases';
+
+    my $ff = File::Fetch->new( uri => $uri );
+    my $downloaded = $ff->fetch( to => $home ) or die $ff->error;
+
+    open my $fh, '<', $downloaded;
+    my $metadata = do { local $/; <$fh> };
+    close $fh;
+
+    my $latest_uri;
+    if ( $metadata =~ /"download_url" : "(.*)",/ ) {
+        $latest_uri = $1;
+    } else {
+        die "Can't get latest CPAN::Perl::Release module info.\n";
+    }
+
+    my $file = File::Fetch->new( uri => $latest_uri );
+    my $archivefile = $file->fetch( to => $home );
+
+    my $archive = Archive::Tar->new;
+    $archive->read( $archivefile ) or die $archive->error;
+    $archive->setcwd( $home )      or die $archive->error;
+    my @files = $archive->extract  or die $archive->error;
+
+    my $module;
+    my $regex = quotemeta(
+            File::Spec->catfile( 'lib', 'CPAN', 'Perl', 'Releases.pm' )
+            );
+
+    foreach my $archived_file ( @files ) {
+        if ( $archived_file->full_path =~ /$regex/ ) {
+            $module = $archived_file->full_path;
+        }
+    }
+
+    local @INC = @INC;
+    unshift @INC, "$home";
+
+    require $module;
+}
+
+sub show_versions {
+
+    my @list = CPAN::Perl::Releases::perl_versions();
+    print $_ . "\n" for @list;
+
+}
+
+sub validate_version_string {
+    my $version_string = shift;
+
+    my $hashref = CPAN::Perl::Releases::perl_tarballs( $version_string );
+
+    return unless $hashref;
+
+    return $hashref->{'tar.gz'};
+}
