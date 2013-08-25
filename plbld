@@ -5,6 +5,7 @@ use warnings;
 
 use autodie;
 
+use Cwd;
 use File::Temp;
 use File::Fetch;
 use File::Path qw/make_path/;
@@ -15,6 +16,7 @@ main() unless caller();
 sub main {
     die "plbld requires path to install.\n" if ( @ARGV == 1 );
 
+    my $cwd = cwd();
     my $home = initialize();
 
     download_CPAN_Perl_Releases( $home );
@@ -41,6 +43,8 @@ sub main {
     chdir File::Spec->catdir( $home, $build_dir->name );
 
     build_perl( $version, $path, \@args );
+
+    chdir $cwd;
 }
 
 sub validate_install_path {
@@ -69,7 +73,7 @@ sub build_perl {
 
     my @frag = split( '.', $version );
 
-    if ( $frag[1] % 2 == 0 ) {
+    if ( $frag[1] % 2 != 0 ) {
         $configure .= ' ' . '-Dusedevel';
     }
 
