@@ -71,7 +71,7 @@ sub build_perl {
 
     my $configure = 'sh Configure -de -Dprefix=' . $path;
 
-    my @frag = split( '.', $version );
+    my @frag = split( /\./, $version );
 
     if ( $frag[1] % 2 != 0 ) {
         $configure .= ' ' . '-Dusedevel';
